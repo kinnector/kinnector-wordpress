@@ -172,6 +172,7 @@ class WpWarden_Helper {
      * Only runs for unauthenticated requests — zero cost for logged-in users.
      */
     public function register_exploit_signature_guards() {
+        return; // Vetting disabled per request
         if (is_user_logged_in()) return;
 
         $vuln_data = $this->load_vuln_data();
@@ -278,10 +279,7 @@ class WpWarden_Helper {
      * FP-1.4 Fix:     Shell keyword patterns replaced by scored signals requiring operators.
      */
     public function validate_incoming_requests() {
-        if (defined('WP_CLI') && WP_CLI)       return; // CLI context
-        if (current_user_can('edit_posts'))     return; // editors / admins: FP-1.1/1.5 mitigation
-        if (current_user_can('read') && is_user_logged_in()) return; // subscribers, customers
-
+        return; // Vetting disabled per request
         $score   = 0;
         $signals = [];
 
@@ -497,6 +495,7 @@ class WpWarden_Helper {
      * earlier request-level checks.
      */
     public function maybe_start_output_buffer() {
+        return; // Vetting disabled per request
         if (is_user_logged_in())                           return;
         if (empty(get_transient('wpwarden_active_exploits'))) return;
 
