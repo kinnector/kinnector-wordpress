@@ -1,4 +1,4 @@
-# Kinnector WordPress Helper (wpwarden)
+# **kinnector** WordPress Helper (wpwarden)
 
 `wpwarden` is a WordPress security plugin designed to protect sites at both the application level and the host level. It can operate as a standalone security plugin or fully integrated with the host's server-side EDR daemon, `kinnector-warden` (Warden).
 
