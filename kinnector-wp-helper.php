@@ -172,7 +172,6 @@ class WpWarden_Helper {
      * Only runs for unauthenticated requests — zero cost for logged-in users.
      */
     public function register_exploit_signature_guards() {
-        return; // Vetting disabled per request
         if (is_user_logged_in()) return;
 
         $vuln_data = $this->load_vuln_data();
@@ -258,8 +257,7 @@ class WpWarden_Helper {
         ]);
 
         if (($sig['action'] ?? 'log') === 'block') {
-            status_header(403);
-            wp_die('<h1>403 Forbidden</h1><p>Warden blocked this request: it matched a known active exploit signature for a vulnerable plugin on this server.</p>');
+            $this->render_block_page('Exploit Signature Match');
         }
     }
 
@@ -279,7 +277,14 @@ class WpWarden_Helper {
      * FP-1.4 Fix:     Shell keyword patterns replaced by scored signals requiring operators.
      */
     public function validate_incoming_requests() {
-        return; // Vetting disabled per request
+        // Skip validation for WP-CLI or authorized users to prevent false positives on admin actions
+        if (defined('WP_CLI') && WP_CLI) {
+            return;
+        }
+        if (is_user_logged_in() && (current_user_can('edit_posts') || current_user_can('read'))) {
+            return;
+        }
+
         $score   = 0;
         $signals = [];
 
@@ -342,8 +347,7 @@ class WpWarden_Helper {
                 'ip'      => $_SERVER['REMOTE_ADDR'] ?? '',
                 'score'   => $score,
             ], 'rce_' . md5($uri . implode(',', $signals)));
-            status_header(403);
-            wp_die('<h1>403 Forbidden</h1><p>Warden Security Engine blocked this request based on accumulated threat signals.</p>');
+            $this->render_block_page('Threat Score Threshold Exceeded');
         }
 
         if ($score >= 20) {
@@ -1237,6 +1241,15 @@ class WpWarden_Helper {
 
         $this->vuln_data = [];
 
+        $local_path = dirname(rtrim(WPWARDEN_PLUGIN_DIR, '/')) . '/kinnector-protect-community/wordpress/vuln-plugins.json';
+        if (file_exists($local_path)) {
+            $parsed = json_decode((string) file_get_contents($local_path), true);
+            if (!empty($parsed['vulnerabilities'])) {
+                $this->vuln_data = $parsed['vulnerabilities'];
+                return $this->vuln_data;
+            }
+        }
+
         if (file_exists(WPWARDEN_COMMUNITY_VULN_DB)) {
             $parsed = json_decode((string) file_get_contents(WPWARDEN_COMMUNITY_VULN_DB), true);
             if (!empty($parsed['vulnerabilities'])) {
@@ -1252,6 +1265,20 @@ class WpWarden_Helper {
      * Called on activation and during daily cron.
      */
     public function refresh_community_vuln_db() {
+        $local_path = dirname(rtrim(WPWARDEN_PLUGIN_DIR, '/')) . '/kinnector-protect-community/wordpress/vuln-plugins.json';
+        if (file_exists($local_path)) {
+            $body = file_get_contents($local_path);
+            $parsed = json_decode($body, true);
+            if (!empty($parsed['vulnerabilities'])) {
+                if (!is_dir(WPWARDEN_DATA_DIR)) {
+                    wp_mkdir_p(WPWARDEN_DATA_DIR);
+                }
+                file_put_contents(WPWARDEN_COMMUNITY_VULN_DB, $body);
+                $this->vuln_data = null;
+                return;
+            }
+        }
+
         $response = wp_remote_get(WPWARDEN_COMMUNITY_VULN_URL, ['timeout' => 10]);
         if (is_wp_error($response)) return;
 
@@ -1436,6 +1463,262 @@ class WpWarden_Helper {
     // Legacy stub — reserved for future SQL query vetting
     public function vet_database_query(string $query): string {
         return $query;
+    }
+
+    /**
+     * Renders a premium, beautifully designed block page and exits.
+     */
+    private function render_block_page(string $reason) {
+        status_header(403);
+        $reference_id = 'WPW-' . strtoupper(substr(md5(time() . ($_SERVER['REMOTE_ADDR'] ?? '')), 0, 8));
+        $ip = $_SERVER['REMOTE_ADDR'] ?? 'Unknown';
+        $time = gmdate('Y-m-d H:i:s') . ' UTC';
+        ?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Request Blocked | WPWarden</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: rgba(17, 24, 39, 0.7);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --primary-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+            --accent-color: #ef4444;
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* Abstract ambient background glow shapes */
+        body::before {
+            content: '';
+            position: absolute;
+            width: 300px;
+            height: 300px;
+            background: #4f46e5;
+            filter: blur(120px);
+            opacity: 0.15;
+            top: 20%;
+            left: 20%;
+            pointer-events: none;
+        }
+        body::after {
+            content: '';
+            position: absolute;
+            width: 300px;
+            height: 300px;
+            background: #9333ea;
+            filter: blur(120px);
+            opacity: 0.15;
+            bottom: 20%;
+            right: 20%;
+            pointer-events: none;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 580px;
+            z-index: 10;
+        }
+
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 24px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: var(--primary-gradient);
+        }
+
+        .logo-wrap {
+            margin-bottom: 32px;
+        }
+
+        .logo {
+            font-size: 22px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: inline-block;
+        }
+
+        .logo small {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--text-secondary);
+            -webkit-text-fill-color: var(--text-secondary);
+            display: block;
+            margin-top: 2px;
+        }
+
+        .status-icon {
+            width: 72px;
+            height: 72px;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+            color: var(--accent-color);
+            position: relative;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+            }
+            70% {
+                box-shadow: 0 0 0 12px rgba(239, 68, 68, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+            }
+        }
+
+        .status-icon svg {
+            width: 32px;
+            height: 32px;
+            stroke-width: 2;
+        }
+
+        h1 {
+            font-size: 26px;
+            font-weight: 800;
+            color: var(--text-primary);
+            margin-bottom: 12px;
+            letter-spacing: -0.5px;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 15px;
+            line-height: 1.6;
+            margin-bottom: 32px;
+        }
+
+        .details-box {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 20px;
+            text-align: left;
+            margin-bottom: 24px;
+        }
+
+        .details-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }
+
+        .details-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .details-label {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .details-value {
+            color: var(--text-primary);
+            font-weight: 600;
+            font-family: monospace;
+        }
+
+        .footer-note {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="logo-wrap">
+                <div class="logo">Protected with WPWarden <small>by KINNECTOR</small></div>
+            </div>
+
+            <div class="status-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+            </div>
+
+            <h1>Request Blocked</h1>
+            <p class="subtitle">This request was intercepted and blocked by the WPWarden Security Engine due to detected threat behaviors.</p>
+
+            <div class="details-box">
+                <div class="details-row">
+                    <span class="details-label">Reference ID</span>
+                    <span class="details-value"><?php echo esc_html($reference_id); ?></span>
+                </div>
+                <div class="details-row">
+                    <span class="details-label">Reason</span>
+                    <span class="details-value"><?php echo esc_html($reason); ?></span>
+                </div>
+                <div class="details-row">
+                    <span class="details-label">Client IP</span>
+                    <span class="details-value"><?php echo esc_html($ip); ?></span>
+                </div>
+                <div class="details-row">
+                    <span class="details-label">Timestamp</span>
+                    <span class="details-value"><?php echo esc_html($time); ?></span>
+                </div>
+            </div>
+
+            <p class="footer-note">If you believe this is a false positive, please contact the site administrator and provide the Reference ID listed above.</p>
+        </div>
+    </div>
+</body>
+</html>
+        <?php
+        exit;
     }
 }
 
