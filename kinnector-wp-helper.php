@@ -738,6 +738,7 @@ class WpWarden_Helper {
     // =========================================================================
 
     public function run_daily_security_scans() {
+        $this->sync_daemon_alerts();
         $this->refresh_community_vuln_db();
         $this->audit_core_checksums();
         $this->scan_and_update_vulnerable_plugins();
@@ -1369,15 +1370,99 @@ class WpWarden_Helper {
     // =========================================================================
 
     public function log_security_event(string $event_type, array $details) {
+        if (empty($details['alert_id'])) {
+            $details['alert_id'] = 'local-' . uniqid() . '-' . rand(1000, 9999);
+        }
+        $details['type']      = $event_type;
+        $details['timestamp'] = isset($details['timestamp']) ? $details['timestamp'] : time();
+
         if ($this->client->is_daemon_active()) {
             $this->client->send_daemon_event('alert', ['event_type' => $event_type, 'details' => $details]);
+        }
+
+        $alerts = get_option('wpwarden_local_alerts', []);
+        
+        // Deduplicate
+        $exists = false;
+        foreach ($alerts as $a) {
+            if (isset($a['alert_id']) && $a['alert_id'] === $details['alert_id']) {
+                $exists = true;
+                break;
+            }
+        }
+        if (!$exists) {
+            $alerts[] = $details;
+            if (count($alerts) > 100) array_shift($alerts);
+            update_option('wpwarden_local_alerts', $alerts);
+        }
+    }
+
+    /**
+     * Fetches new alerts from the Warden daemon and merges them into the local store.
+     */
+    public function sync_daemon_alerts() {
+        if (!$this->client->is_daemon_active()) {
             return;
         }
-        $alerts = get_option('wpwarden_local_alerts', []);
-        $details['timestamp'] = time();
-        $alerts[] = $details;
-        if (count($alerts) > 100) array_shift($alerts);
-        update_option('wpwarden_local_alerts', $alerts);
+
+        $daemon_alerts = $this->client->get_daemon_alerts();
+        if (empty($daemon_alerts)) {
+            return;
+        }
+
+        $local_alerts = get_option('wpwarden_local_alerts', []);
+        $updated = false;
+
+        // Build list of existing alert IDs for O(1) checks
+        $existing_ids = [];
+        foreach ($local_alerts as $la) {
+            if (!empty($la['alert_id'])) {
+                $existing_ids[$la['alert_id']] = true;
+            }
+        }
+
+        foreach ($daemon_alerts as $da) {
+            $aid = isset($da['alert_id']) ? $da['alert_id'] : '';
+            if (empty($aid)) {
+                continue;
+            }
+
+            // Skip if already in local alerts
+            if (isset($existing_ids[$aid])) {
+                continue;
+            }
+
+            // Convert to local format
+            $local_alert = [
+                'alert_id'  => $aid,
+                'type'      => isset($da['threat_type']) ? $da['threat_type'] : 'Unknown',
+                'detail'    => isset($da['remediation']['status']) ? $da['remediation']['status'] : '',
+                'timestamp' => isset($da['timestamp']) ? strtotime($da['timestamp']) : time(),
+                'severity'  => isset($da['severity']) ? strtolower($da['severity']) : 'info',
+            ];
+
+            // If it's a daemon-level process threat, we can enrich the detail with process name/cmdline
+            if (!empty($da['process']['exec_path'])) {
+                $local_alert['detail'] .= sprintf(
+                    ' [Process: %s (PID %d), Cmd: %s]',
+                    basename($da['process']['exec_path']),
+                    $da['process']['pid'],
+                    $da['process']['cmdline']
+                );
+            }
+
+            $local_alerts[] = $local_alert;
+            $existing_ids[$aid] = true;
+            $updated = true;
+        }
+
+        if ($updated) {
+            // Keep at most 100 alerts
+            if (count($local_alerts) > 100) {
+                $local_alerts = array_slice($local_alerts, -100);
+            }
+            update_option('wpwarden_local_alerts', $local_alerts);
+        }
     }
 
     /**

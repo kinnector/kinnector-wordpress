@@ -105,4 +105,36 @@ class WpWarden_Client {
 
         return false;
     }
+
+    /**
+     * Fetches recent alerts from the Warden daemon.
+     */
+    public function get_daemon_alerts() {
+        if (!$this->is_daemon_active()) {
+            return [];
+        }
+
+        $fp = @stream_socket_client($this->socket_path, $errno, $errstr, 2);
+        if (!$fp) {
+            return [];
+        }
+
+        $request = "GET /api/v1/alerts HTTP/1.1\r\nHost: localhost\r\nConnection: Close\r\n\r\n";
+        fwrite($fp, $request);
+
+        $response = '';
+        while (!feof($fp)) {
+            $response .= fgets($fp, 512);
+        }
+        fclose($fp);
+
+        // Parse HTTP response and extract body
+        $parts = explode("\r\n\r\n", $response, 2);
+        if (count($parts) < 2) {
+            return [];
+        }
+
+        $body = json_decode($parts[1], true);
+        return isset($body['alerts']) ? $body['alerts'] : [];
+    }
 }

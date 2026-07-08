@@ -1,36 +1,63 @@
-# **kinnector** WordPress Helper (wpwarden)
+# Kinnector WordPress Helper (wpwarden)
 
-`wpwarden` is a WordPress security plugin designed to protect sites at both the application level and the host level. It can operate as a standalone security plugin or fully integrated with the host's server-side EDR daemon, `kinnector-warden` (Warden).
+`wpwarden` is the official WordPress integration plugin for the Kinnector Warden server-side EDR security suite. It intercepts malicious HTTP requests and database queries before they execute.
 
-While the plugin provides baseline SQLi and CMD-i vetting in standalone mode, connecting it to the Warden daemon enables complete host-level protection:
+---
 
-* **System Call Interception**: Hooks system calls to detect and prevent Remote Code Execution (RCE) in real-time.
-* **Process & Subprocess Monitoring**: Automatically tracks and stops unauthorized child processes spawned from the web server context.
-* **Low-Latency Vetting**: Offloads heavy HTTP request parsing to Warden's zero-allocation C++ engine (vetting takes less than 50 microseconds), preventing PHP bottlenecking.
+## What it protects
 
-## Features
+WordPress sites are constant targets for arbitrary file uploads, SQL injection (SQLi), and remote code execution (RCE) via themes and plugins. 
 
-* **Early-Stage Interception**: Intercepts and parses incoming parameters (`$_GET`, `$_POST`, `$_COOKIE`, and headers) early in the WordPress lifecycle (`plugins_loaded`).
-* **SQL Injection Prevention**: Wraps the core `wpdb` database class to inspect and vet raw queries prior to execution.
-* **Automated Bootstrapping**: Automatically detects the local Warden socket or assists in installing it.
+`wpwarden` protects the entire WordPress runtime. It intercepts input buffers (`$_GET`, `$_POST`, `$_COOKIE`, and headers) and database queries at the PHP level, offloading validation to the local security daemon to block attacks before WordPress processes them.
+
+---
+
+## Why traditional WordPress plugins are insufficient
+
+Traditional security plugins are written entirely in PHP. If an attacker successfully uploads a malicious shell or bypasses the PHP entrypoint, the plugin's hooks are bypassed completely. Additionally, parsing large HTTP payloads in PHP introduces heavy CPU overhead, bottlenecking high-traffic sites.
+
+`wpwarden` solves this. In standalone mode, it provides baseline vetting. When integrated with the host EDR daemon, it offloads heavy payload validation to the local Warden socket, reducing response overhead to less than 50 microseconds. If an exploit runs, the server daemon blocks it at the OS kernel level, terminating unauthorized subprocesses.
+
+---
+
+## Core Capabilities
+
+* **Early-Stage Lifecycle Interception**: Hooks early in the boot sequence (`plugins_loaded`) to filter raw input values before themes or core plugins load.
+* **Database Query Wrapper**: Wraps the core `wpdb` class, analyzing raw SQL statements prior to driver execution to block SQLi attempts.
+* **Automated Daemon Bootstrapping**: Detects the local Unix domain socket and helps administrators install the server-level daemon if missing.
+
+---
+
+## Technical Integration Flow
+
+```
+[ HTTP Request ] ──> [ wpwarden PHP Hook ] ──(Unix Socket)──> [ wardend Daemon ]
+                                                                   │
+                                                      ALLOWED? ────┼─── YES ──> [ Run WordPress / DB ]
+                                                                   └─── NO  ──> [ Abort (403 Forbidden) ]
+```
+
+---
 
 ## Warden Daemon Bootstrapping
 
-On activation, `wpwarden` checks for the Unix socket at `/var/run/kinnector/warden.sock`. If unavailable, it falls back to standalone mode and attempts recovery:
+`wpwarden` checks for the active daemon socket at `/var/run/kinnector/warden.sock`. If unavailable, it falls back to standalone PHP-only protection and presents setup options:
 
-### Automatic Installation
-If the PHP process has write access to system bin directories (e.g., in developer/Docker environments), the plugin will install the pre-compiled `wardend` binary to `/usr/local/bin/wardend` and configure systemd.
+### 1. Automatic Installation
+If the PHP process has root/sudo write permissions (e.g. inside Docker containers), the plugin will install the pre-compiled `wardend` binary to `/usr/local/bin/wardend` and configure the systemd service automatically.
 
-### Manual Installation
-If system-level permissions are restricted, the plugin displays an administrative dashboard notice with instructions to run the host installer:
+### 2. Manual Installation
+For environments with restricted PHP permissions, the plugin displays a dashboard notice with host installation instructions:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/kinnector/kinnector-installer/main/install-warden.sh | sudo bash
 ```
 
-## Directory Structure
+---
 
-* `kinnector-wp-helper.php`: Main plugin entry point and hook registrations.
-* `src/class-wpwarden-admin.php`: Admin settings panels and system setup alerts.
-* `src/class-wpwarden-client.php`: Socket and HTTP client communication layer for `/var/run/kinnector/warden.sock`.
-* `src/class-wpwarden-db.php`: Custom `wpdb` wrapper class for query analysis.
+## File Structure
+
+* `kinnector-wp-helper.php`: Core plugin loader and hook registrations.
+* `src/class-wpwarden-db.php`: Custom `wpdb` database wrapper class for query vetting.
+* `src/class-wpwarden-client.php`: Socket and HTTP communicator for `/var/run/kinnector/warden.sock`.
+* `src/class-wpwarden-admin.php`: Administrative dashboard settings and setup alerts.

@@ -167,12 +167,22 @@ class WpWarden_Admin {
             wp_die('Insufficient permissions.');
         }
 
+        $daemon_active = $this->client->is_daemon_active();
+
+        // Fetch/sync daemon alerts on dashboard render (rate limited to once every 10 seconds)
+        if ($daemon_active) {
+            $transient = 'wpwarden_alerts_sync_lock';
+            if (!get_transient($transient)) {
+                WpWarden_Helper::get_instance()->sync_daemon_alerts();
+                set_transient($transient, 1, 10);
+            }
+        }
+
         $active_tab = sanitize_key($_GET['tab'] ?? 'overview');
         if (!in_array($active_tab, self::$valid_tabs, true)) {
             $active_tab = 'overview';
         }
 
-        $daemon_active = $this->client->is_daemon_active();
         $is_paid       = $this->client->is_paid_license();
 
         settings_errors('wpwarden_messages');
